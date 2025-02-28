@@ -1,0 +1,7 @@
+
+## Ommitting large data files 
+
+data/outs
+
+## Omitting large R object files
+*.RDS
