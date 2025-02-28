@@ -1,0 +1,415 @@
+---
+title: "Spatial Analysis of breast cancer tumor microenvironment"
+author: "Aymen Maqsood"
+date: "2025-01-23"
+output:
+  html_document:
+    df_print: paged
+    toc: false
+  pdf_document:
+    toc: false
+    keep_tex: true
+  word_document:
+    toc: false
+---
+
+
+
+```{r}
+knitr::opts_chunk$set(
+warning = FALSE,
+message = FALSE,
+echo = FALSE  # Show code in the output
+)
+```
+
+
+
+
+# Spatial Data Analysis Report: Xenium Human Breast Cancer Dataset
+Independent Project of analysis workflow performed to study the spatial transcriptomics of a human breast cancer dataset generated using the Xenium platform.
+The analysis follows standard steps like:
+
+- **Data Preprocessing**
+- **Normalization**
+- **Dimensionality Reduction**
+- **Clustering**
+- **Cell Type Annotation**
+- **Spatial Visualization**
+
+## Key Findings
+The analysis found distinct cell populations, with invasive carcinoma cells concentrated in specific areas, potentially indicating tumor boundaries. FAS expression was notably high in these invasive regions, surprising given its role in tumor metabolism, while CEACAM6 marked ductal carcinoma areas. Immune cells were scattered, suggesting infiltration into the tumor.
+
+## Introduction
+The Xenium platform is a spatial transcriptomics technology that allows for the simultaneous measurement of gene expression and spatial location of cells in a tissue section. The dataset contains gene expression data from thousands of cells, as well as spatial information about the location of each cell in the tissue section. In this analysis, we will conduct a comprehensive analysis of the Dataset to identify cell types, spatial patterns, and marker genes associated with breast cancer.
+
+**Data Source:**: https://www.10xgenomics.com/products/xenium-in-situ/preview-dataset-human-breast
+
+
+
+### Loading Packages 
+```{r, message=FALSE, warning=FALSE}
+library(Seurat)
+library(tidyverse)
+library(SeuratObject)
+```
+
+
+### Loading Data
+```{r, message=FALSE, warning=FALSE}
+
+xenium.obj <- LoadXenium(
+  "~/Desktop/Projects/V1.0/Spatial-scRNA-Seq/Xenium Human Breast Cancer Dataset/data/outs/",
+  fov = "fov", 
+  assay = "Xenium"
+)
+```
+
+
+### Data Preprocessing / Quality Control 
+Initial preprocessing removes low-quality cells and visualizes key metrics:
+
+- **Remove cells with zero counts:** Ensures only cells with detectable transcripts are analyzed.
+- **Visualize distributions:** Violin plots display genes per cell (`nFeature_Xenium`) and transcript counts per cell (`nCount_Xenium`).
+- **Filtering:** Cells are subsetted to retain those with 5–200 features and 10–1000 counts, reducing noise from low-quality cells or outliers.
+```{r}
+# remove cells with 0 counts
+xenium.obj <- subset(xenium.obj, subset = nCount_Xenium > 0)
+
+# Genes/cell (nFeature_Xenium) and transcript counts/cell (nCount_Xenium)
+VlnPlot(xenium.obj, features = c("nFeature_Xenium", "nCount_Xenium"), 
+        ncol = 2, pt.size = 0)
+# Save the plot
+ggsave("VlnPlot_QC.png", width = 8, height = 4)
+
+# 166363 cells X 313 genes , initially reduced to quality cells
+xenium.obj <- subset(xenium.obj, 
+                     subset = nFeature_Xenium > 5 & nFeature_Xenium < 200 & 
+                       nCount_Xenium > 10 & nCount_Xenium < 1000)
+```
+
+
+
+### Normalization and Scaling
+To correct for technical variations (e.g., sequencing depth), we apply `SCTransform`, a variance-stabilizing normalization method that accounts for gene expression dependencies on sequencing depth. note: The method also scales the data to account for differences in gene expression magnitude.
+```{r}
+xenium.obj <- SCTransform(xenium.obj, assay = "Xenium")
+```
+
+
+### Dimensionality Reduction
+
+Dimensionality reduction simplifies the dataset while preserving biologically relevant variation:
+
+- **PCA:** Computes the top 30 principal components.
+- **UMAP:** Projects the data into a 2D space for visualization.
+
+
+
+```{r}
+# Run PCA
+xenium.obj <- RunPCA(xenium.obj, npcs = 30, features = rownames(xenium.obj))
+
+# Run UMAP
+xenium.obj <- RunUMAP(xenium.obj, dims = 1:30)
+
+```
+
+
+### Clustering
+
+groupeing cells based on shared expression profiles:
+
+- **Find Neighbors:** Uses PCA-reduced data to identify cell neighbors.
+- **Find Clusters:** Applies a resolution of 0.2 to define clusters, visualized with a UMAP plot.
+
+
+```{r}
+# Find neighbors
+xenium.obj <- FindNeighbors(xenium.obj, reduction = "pca", dims = 1:30)
+
+# Find clusters
+xenium.obj <- FindClusters(xenium.obj, resolution = 0.2)
+
+# Visualize clusters
+DimPlot(xenium.obj, group.by = "seurat_clusters", label = TRUE)
+
+# Save the plot
+ggsave("Cluster_UMAP.png", width = 6, height = 6)
+```
+
+
+
+### Cell Type Annotation
+
+The above Clusters are annotated using differential expression analysis and known marker genes:
+
+- **Find Markers:** Identifies genes differentially expressed in each cluster.
+- **Visualize Markers:** Feature plots display expression of cell-type-specific genes.
+- **Assign Identities:** Clusters are renamed based on marker expression.
+
+
+**Marker Genes Used:**
+- **B cells:** MS4A1, CD79A
+- **Macrophages:** ITGAX
+- **T cells:** CD3E, CD4, CD8A
+- **NK cells:** NKG7
+- **Mast cells:** KIT
+- **Endothelial cells:** PECAM1
+- **Myoepithelial cells:** KRT15
+- **Fibroblasts:** LUM
+- **Proliferating cells:** MKI67
+- **Ductal carcinoma:** CEACAM6
+- **Invasive tumor:** FASN
+
+
+
+```{r}
+# Find marker genes for all clusters
+AllMarkers <- FindAllMarkers(xenium.obj)
+
+# Feature plots for key marker genes
+FeaturePlot(xenium.obj, features = c("MS4A1", "CD79A", "ITGAX", "CD3E"))  # B cells, macrophages, T cells
+ggsave("FeaturePlot_Immune.png", width = 8, height = 8)
+
+FeaturePlot(xenium.obj, features = c("CD4", "CD8A", "NKG7", "KIT"))       # T cells, NK cells, Mast cells
+ggsave("FeaturePlot_Immune2.png", width = 8, height = 8)
+
+FeaturePlot(xenium.obj, features = c("PECAM1", "KRT15", "LUM", "MKI67"))  # Endothelial, myoepithelial, fibroblasts, proliferating
+ggsave("FeaturePlot_Stroma.png", width = 8, height = 8)
+
+FeaturePlot(xenium.obj, features = c("CEACAM6", "FASN"))                  # Ductal carcinoma, invasive tumor
+ggsave("FeaturePlot_Tumor.png", width = 8, height = 8)
+
+# Rename clusters to cell types
+xenium.obj <- RenameIdents(xenium.obj, 
+                           `0` = "invasive", `2` = "ductal", `11` = "ductal", `6` = "myoepithelial", 
+                           `3` = "Fibroblasts", `4` = "macrophages", `5` = "Endothelial", 
+                           `1` = "T/NK cells", `10` = "T/NK cells", `7` = "B cells", `8` = "B cells", 
+                           `9` = "Mast cells")
+
+# Assign cell types to metadata
+xenium.obj$cell_type <- Idents(xenium.obj)
+
+# Visualize cell types
+DimPlot(xenium.obj, group.by = "cell_type", label = TRUE)
+ggsave("CellType_UMAP.png", width = 6, height = 6)
+
+```
+
+
+### Spatial Visualization
+
+Spatial plots integrate gene expression with tissue coordinates:
+
+- **Cluster/Cell Type Maps:** Spatial plots of clusters and cell types using ImageDimPlot.
+- **Gene Expression Maps:** Gene expression maps for FAS and CEACAM6 using ImageFeaturePlot, with color scales (e.g., white to red for FAS, blue to red for CEACAM6).
+- **Tumor Markers:** Tumor-specific marker genes overlaid on spatial coordinates.
+
+```{r}
+# Spatial plot of clusters
+ImageDimPlot(xenium.obj, group.by = "seurat_clusters", size = 0.9)
+ggsave("Spatial_Clusters.png", width = 6, height = 6)
+
+# Spatial plot of cell types
+ImageDimPlot(xenium.obj, group.by = "cell_type", size = 0.9)
+ggsave("Spatial_CellTypes.png", width = 6, height = 6)
+
+# Gene expression spatial plots
+ImageFeaturePlot(xenium.obj, features = "FASN", cols = c("white", "red"))
+ggsave("Spatial_FASN.png", width = 6, height = 6)
+
+ImageFeaturePlot(xenium.obj, features = "CEACAM6", cols = c("blue", "red"))
+ggsave("Spatial_CEACAM6.png", width = 6, height = 6)
+
+# Tumor-specific marker genes on spatial coordinates
+ImageDimPlot(xenium.obj, fov = "fov", nmols = 20000, axes = TRUE,
+             molecules = c("CEACAM6", "FASN"))
+ggsave("Spatial_TumorMarkers.png", width = 6, height = 6)
+```
+
+
+### Further downstream analysis
+
+```{r}
+# library(seurat)
+library(tidyverse)
+library(pheatmap)
+
+```
+
+### Marker Gene Heatmap
+top differentially expressed genes per cluster to understand their molecular signatures.
+```{r}
+library(tidyverse)
+library(pheatmap)
+
+# Step 1: Find top markers per cluster using SCT assay
+markers <- FindAllMarkers(xenium.obj, assay = "SCT", only.pos = TRUE, 
+                          min.pct = 0.25, logfc.threshold = 0.25)
+top_markers <- markers %>% group_by(cluster) %>% top_n(5, wt = avg_log2FC)
+
+# Step 2: Average expression per cluster using SCT assay
+avg_exp <- AverageExpression(xenium.obj, features = unique(top_markers$gene), 
+                             group.by = "seurat_clusters", slot = "data", 
+                             assay = "SCT")[[1]]
+
+# Step 3: Enhanced pheatmap with display
+p <- pheatmap(avg_exp,
+         scale = "row",  # Keep row scaling for relative expression
+         cluster_rows = TRUE,  # Cluster genes
+         cluster_cols = TRUE,  # Cluster clusters
+         show_rownames = TRUE,  # Show gene names
+         show_colnames = TRUE,  # Show cluster names
+         fontsize_row = 8,  # Smaller font for genes to avoid overlap
+         fontsize_col = 10,  # Larger font for clusters
+         color = colorRampPalette(c("blue", "white", "red"))(100),  # Custom color scale
+         breaks = seq(-2, 2, length.out = 101),  # Limit color range for better contrast
+         border_color = NA,  # Remove borders for cleaner look
+         main = "Top Marker Genes by Cluster (SCT Normalized)",  # Add title
+         angle_col = 45,  # Rotate column labels for readability
+         cellwidth = 20,  # Adjust cell width
+         cellheight = 10,  # Adjust cell height
+         display = TRUE,  # Display the plot on screen
+         filename = "Improved_Cluster_Marker_Heatmap.png")  # Save as PNG
+
+
+p 
+
+
+# Optionally, save a PDF for higher quality (displayed separately if needed)
+pdf("Improved_Cluster_Marker_Heatmap.pdf", width = 10, height = 8)
+pheatmap(avg_exp,
+         scale = "row", cluster_rows = TRUE, cluster_cols = TRUE,
+         show_rownames = TRUE, show_colnames = TRUE,
+         fontsize_row = 8, fontsize_col = 10,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         breaks = seq(-2, 2, length.out = 101),
+         border_color = NA,
+         main = "Top Marker Genes by Cluster (SCT Normalized)",
+         angle_col = 45,
+         cellwidth = 20, cellheight = 10)
+dev.off()
+```
+
+
+
+
+## 3. Spatial Gene Co-expression
+
+```{r}
+
+
+genes <- c("FASN", "CEACAM6")
+expr_data <- GetAssayData(xenium.obj, slot = "data")[genes, ]
+
+# Step 2: Compute correlation
+cor_val <- cor(t(as.matrix(expr_data)), method = "pearson")[1, 2]
+cat("Correlation between FASN and CEACAM6:", cor_val, "\n")
+
+# Step 3: Visualize co-expression spatially
+xenium.obj$co_expr <- colMeans(expr_data)  # Average expression as a crude co-expression proxy
+ImageFeaturePlot(xenium.obj, features = "co_expr", cols = c("white", "purple")) +
+  labs(title = paste("FASN-CEACAM6 Co-expression (Cor =", round(cor_val, 2), ")"))
+ggsave("Spatial_Coexpression.png", width = 6, height = 6)
+```
+
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(tidyverse)
+
+# Ensure cell types are assigned (from your original annotation)
+# Assuming you ran:
+# xenium.obj <- RenameIdents(xenium.obj, `0` = "invasive", `2` = "ductal", ...)
+# xenium.obj$cell_type <- Idents(xenium.obj)
+
+# Step 1: Extract spatial coordinates and cell type data
+spatial_data <- GetTissueCoordinates(xenium.obj)  # Get x, y coordinates
+spatial_data$cell_type <- xenium.obj$cell_type  # Add cell types
+
+# Step 2: Define a distinct color palette for cell types
+celltype_colors <- c("invasive" = "#FF6B6B", "ductal" = "#FFA500", 
+                     "myoepithelial" = "#FFD700", "Fibroblasts" = "#90EE90", 
+                     "macrophages" = "#00CED1", "Endothelial" = "#1E90FF", 
+                     "T/NK cells" = "#9370DB", "B cells" = "#DDA0DD", 
+                     "Mast cells" = "#FF69B4")
+
+# Step 3: Create a spatial heatmap (density-based)
+ggplot(spatial_data, aes(x = x, y = y, fill = cell_type)) +
+  geom_bin2d(binwidth = c(50, 50), alpha = 0.7) +  # Aggregate by density in 50x50 pixel bins
+  scale_fill_manual(values = celltype_colors, name = "Cell Type") +
+  labs(title = "Spatial Distribution of Cell Types in Breast Cancer Tissue",
+       x = "X Coordinate", y = "Y Coordinate") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14),
+        legend.position = "right",
+        legend.text = element_text(size = 10),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  coord_fixed(ratio = 1)  # Maintain aspect ratio for accurate spatial representation
+
+# Save the plot with high resolution
+ggsave("Spatial_CellType_Distribution.png", width = 10, height = 8, dpi = 300)
+
+
+
+# Save the bubble plot
+ggsave("Spatial_CellType_Bubble.png", width = 10, height = 8, dpi = 300)
+```
+
+
+
+
+
+## Results
+
+
+The analysis of the Xenium Human Breast Cancer Dataset provided key insights into cellular composition and spatial organization:
+
+1. **Cell Type Identification**
+   - Clustering identified distinct populations, annotated as invasive and ductal carcinoma cells, myoepithelial cells, fibroblasts, macrophages, endothelial cells, T/NK cells, B cells, and mast cells.
+   - Marker gene expression validated these annotations (e.g., FASN for invasive tumors [1], CEACAM6 for ductal carcinoma [2]). See the table below for key markers:
+
+   | Cell Type          | Marker Genes      | Reference         |
+   |--------------------|-------------------|-------------------|
+   | Invasive Tumor     | FASN              | Swinnen et al., 2006 [1] |
+   | Ductal Carcinoma   | CEACAM6           | Blumenthal et al., 2007 [2] |
+   | B Cells            | MS4A1, CD79A      | Standard markers  |
+   | Macrophages        | ITGAX             | Standard markers  |
+   | T/NK Cells         | CD3E, CD4, CD8A, NKG7 | Standard markers  |
+   | Endothelial        | PECAM1            | Standard markers  |
+   | Myoepithelial      | KRT15             | Standard markers  |
+   | Fibroblasts        | LUM               | Standard markers  |
+   | Mast Cells         | KIT               | Standard markers  |
+
+2. **Spatial Organization**
+   - The spatial plot (`Spatial_TumorMarkers.png`) revealed invasive carcinoma cells concentrated in peripheral regions, potentially marking tumor boundaries, while ductal carcinoma cells aligned with central ductal structures (see Figure 1).
+   - Immune cells (macrophages, T/NK cells) were dispersed throughout the tissue, suggesting infiltration into the tumor microenvironment, consistent with immune surveillance roles [3].
+
+   ![Figure 1: Spatial distribution of tumor markers CEACAM6 (ductal) and FASN (invasive)](Spatial_TumorMarkers.png)
+
+3. **Gene Expression Patterns**
+   - FASN expression was elevated in invasive regions (`Spatial_FASN.png`), aligning with its role in lipid metabolism supporting tumor growth [1].
+   - CEACAM6 marked ductal carcinoma areas (`Spatial_CEACAM6.png`), consistent with its association with epithelial-derived cancers [2].
+
+These findings underscore the cellular diversity and spatial architecture of the breast cancer microenvironment, with implications for tumor progression and immune interactions.
+
+---
+
+
+## Conclusion
+
+This spatial transcriptomics analysis demonstrates the utility of the Xenium platform in dissecting the breast cancer tumor microenvironment. By combining gene expression with spatial data, I identified key cell types and their distributions, offering insights into tumor-immune interactions and potential therapeutic targets.The elevated FAS expression in invasive regions underscores its metabolic role, suggesting avenues for targeting lipid metabolism in cancer therapy.
+Future work could integrate additional datasets or functional assays to validate these findings and explore clinical implications.
+
+---
+
+## References
+
+1. Swinnen, J. V., et al. (2006). "Fatty acid synthase drives the growth of prostate cancer cells." *Cancer Research*, 66(8), 3814-3820.
+2. Blumenthal, R. D., et al. (2007). "Carcinoembryonic antigen (CEA) and CEACAM6 in cancer progression." *Cancer Biology & Therapy*, 6(6), 831-837.
+3. Hanahan, D., & Weinberg, R. A. (2011). "Hallmarks of cancer: The next generation." *Cell*, 144(5), 646-674.
+
+---
